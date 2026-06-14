@@ -1,9 +1,16 @@
 # Training
 
+Wajpierw będziesz musiał stworzyć wirtualne środowisko 
+```
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
 From the project root (`Spikent/`):
 
 ```bash
-.venv/bin/python -m src.train --small --max-samples 10000 --epochs 1 --batch-size 8 --output-dir ./checkpoints
+python3 -m src.train --small --max-samples 10000 --epochs 1 --batch-size 8 --output-dir ./checkpoints
 ```
 
 Key flags:
@@ -19,7 +26,7 @@ The default config in `config.py` trains on `HuggingFaceFW/finetranslations` Pol
 Point it at a checkpoint directory containing `checkpoint.pt` and the saved tokenizer:
 
 ```bash
-.venv/bin/python -m src.inference --checkpoint ./checkpoints/best --text "Dzień dobry. Jak się masz?"
+python3 -m src.inference --checkpoint ./checkpoints/best --text "Dzień dobry. Jak się masz?"
 ```
 
 Flags:
@@ -32,10 +39,10 @@ Flags:
 
 ```bash
 # 1. Quick CPU smoke test
-.venv/bin/python -m src.train --small --no-amp --max-samples 1000 --epochs 1 --batch-size 4 --output-dir ./test-checkpoints
+python3 -m src.train --small --no-amp --max-samples 1000 --epochs 1 --batch-size 4 --output-dir ./test-checkpoints
 
 # 2. Translate with the final checkpoint
-.venv/bin/python -m src.inference --checkpoint ./test-checkpoints/best --small --text "Dzień dobry. Jak się masz?"
+python3 -m src.inference --checkpoint ./test-checkpoints/best --small --text "Dzień dobry. Jak się masz?"
 ```
 
 A couple of things to note:
