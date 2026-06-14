@@ -1,68 +1,44 @@
-# Polish → English Tiny Transformer
+# Training
 
-A small encoder-decoder Transformer trained from scratch on the [HuggingFaceFW/finetranslations](https://huggingface.co/datasets/HuggingFaceFW/finetranslations) `pol_Latn` subset, using the [Helsinki-NLP/opus-mt-pl-en](https://huggingface.co/Helsinki-NLP/opus-mt-pl-en) tokenizer.
-
-## Setup
+From the project root (`Spikent/`):
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+.venv/bin/python -m src.train --small --max-samples 10000 --epochs 1 --batch-size 8 --output-dir ./checkpoints
 ```
 
-> For ROCm on a local RX 680M, install the ROCm PyTorch wheel instead of the CUDA one. See [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/).
+Key flags:
+- `--small` — uses `SmallModelConfig` (d_model=128, 2 layers); good for CPU/laptop testing.
+- `--max-samples` — cap the streaming dataset (default 2M).
+- `--epochs`, `--batch-size`, `--output-dir` — self-explanatory.
+- `--no-amp` — disables mixed precision; required on CPU since fp16 needs CUDA.
 
-## Project layout
-
-```
-Spikent/
-├── config.py            # Model + training hyperparameters
-├── requirements.txt
-├── README.md
-└── src/
-    ├── model.py         # TransformerTranslator (small encoder-decoder)
-    ├── dataset.py       # Streaming dataset loader & collator
-    ├── train.py         # Training loop (Hugging Face Accelerate)
-    └── inference.py     # Local inference script
-```
-
-## Train
-
-Run locally or on a rented cloud GPU:
-
-```bash
-python -m src.train \
-  --max-samples 500000 \
-  --epochs 3 \
-  --batch-size 64 \
-  --output-dir ./checkpoints
-```
-
-You can override any hyperparameter in `config.py` by editing it directly.
-
-Default model size (~30–40M parameters):
-- d_model = 512
-- 4 encoder + 4 decoder layers
-- 8 attention heads
-- FFN dim = 1024
-- max sequence length = 128
+The default config in `config.py` trains on `HuggingFaceFW/finetranslations` Polish (`pol_Latn`) using the `Helsinki-NLP/opus-mt-pl-en` tokenizer. Checkpoints are saved to `--output-dir` every `--save-every` steps (default 5000), and a final `best/` checkpoint is copied at the end.
 
 ## Inference
 
-After training:
+Point it at a checkpoint directory containing `checkpoint.pt` and the saved tokenizer:
 
 ```bash
-python -m src.inference \
-  --checkpoint ./checkpoints/best \
-  --text "Dzień dobry. Jak się masz?"
+.venv/bin/python -m src.inference --checkpoint ./checkpoints/best --text "Dzień dobry. Jak się masz?"
 ```
 
-## Notes on local RX 680M use
+Flags:
+- `--checkpoint` (required) — checkpoint directory, e.g. `./checkpoints/step_5000` or `./checkpoints/best`.
+- `--text` — Polish text to translate (default: `"Dzień dobry. Jak się masz?"`).
+- `--small` — use `SmallModelConfig` if the model was trained with `--small`.
+- `--device` — override device (`cuda`/`cpu`).
 
-- This model is sized for inference on a 4GB-class iGPU.
-- Training from scratch on an RX 680M is possible but very slow (weeks for a useful model). Use the cloud GPU for training and the RX 680M for inference.
-- On Linux with ROCm, the inference script will automatically use `cuda:0`. On Windows/WSL or if ROCm is unavailable, it falls back to CPU.
+## Example workflow
 
-## Data details
+```bash
+# 1. Quick CPU smoke test
+.venv/bin/python -m src.train --small --no-amp --max-samples 1000 --epochs 1 --batch-size 4 --output-dir ./test-checkpoints
 
-The dataset streams from Hugging Face. Polish sentences come from `og_full_text`, English translations from `translated_text`. Examples are filtered by `og_language_score >= 0.9` and very short examples are skipped.
+# 2. Translate with the final checkpoint
+.venv/bin/python -m src.inference --checkpoint ./test-checkpoints/best --small --text "Dzień dobry. Jak się masz?"
+```
+
+A couple of things to note:
+- Training uses Hugging Face `accelerate`, so multi-GPU / mixed precision is handled automatically if CUDA is available.
+- The script exits with `os._exit(0)` to avoid a known PyArrow streaming shutdown crash.
+- If you expected an `interface.py` file, it isn't currently in the repo — only `src/train.py` and `src/inference.py` exist.
