@@ -32,10 +32,10 @@ Flags:
 
 ```bash
 # 1. Quick CPU smoke test
-python -m src.train --small --no-amp --max-samples 1000 --epochs 1 --batch-size 4 --output-dir ./test-checkpoints
+.venv/bin/python -m src.train --small --no-amp --max-samples 1000 --epochs 1 --batch-size 4 --output-dir ./test-checkpoints
 
 # 2. Translate with the final checkpoint
-python -m src.inference --checkpoint ./test-checkpoints/best --small --text "Dzień dobry. Jak się masz?"
+.venv/bin/python -m src.inference --checkpoint ./test-checkpoints/best --small --text "Dzień dobry. Jak się masz?"
 ```
 
 A couple of things to note:
