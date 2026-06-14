@@ -14,9 +14,9 @@ from torch import optim
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import IterableDataset
 from tqdm import tqdm
-from transformers import AutoTokenizer
+from transformers import MarianTokenizer
 
-from config import ModelConfig, TrainConfig
+from config import ModelConfig, SmallModelConfig, TrainConfig
 from src.dataset import (
     TranslationIterableDataset,
     build_dataloader,
@@ -57,6 +57,7 @@ def save_checkpoint(
     model: nn.Module,
     optimizer: optim.Optimizer,
     scheduler,
+    tokenizer,
     step: int,
     output_dir: str,
     is_best: bool = False,
@@ -64,26 +65,27 @@ def save_checkpoint(
     save_dir = Path(output_dir) / f"step_{step}"
     if accelerator.is_main_process:
         save_dir.mkdir(parents=True, exist_ok=True)
+
+    accelerator.wait_for_everyone()
+    unwrapped_model = accelerator.unwrap_model(model)
+    state = {
+        "step": step,
+        "model_state_dict": unwrapped_model.state_dict(),
+    }
+    if accelerator.is_main_process:
+        state["optimizer_state_dict"] = optimizer.state_dict()
+        state["scheduler_state_dict"] = scheduler.state_dict()
+
+    accelerator.save(state, save_dir / "checkpoint.pt")
+    if accelerator.is_main_process:
+        tokenizer.save_pretrained(save_dir)
+        (save_dir / "DONE").touch()
+
         if is_best:
             best_dir = Path(output_dir) / "best"
             if best_dir.exists():
                 shutil.rmtree(best_dir)
             shutil.copytree(save_dir, best_dir)
-
-    accelerator.wait_for_everyone()
-    unwrapped_model = accelerator.unwrap_model(model)
-    accelerator.save(
-        {
-            "step": step,
-            "model_state_dict": unwrapped_model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "scheduler_state_dict": scheduler.state_dict(),
-        },
-        save_dir / "checkpoint.pt",
-    )
-    if accelerator.is_main_process:
-        tokenizer.save_pretrained(save_dir)
-        (save_dir / "DONE").touch()
 
 
 def train(cfg: TrainConfig, model_cfg: ModelConfig):
@@ -93,10 +95,7 @@ def train(cfg: TrainConfig, model_cfg: ModelConfig):
         gradient_accumulation_steps=cfg.gradient_accumulation_steps,
     )
 
-    global tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(cfg.tokenizer_name)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer = MarianTokenizer.from_pretrained(cfg.tokenizer_name)
 
     model_cfg.src_vocab_size = len(tokenizer)
     model_cfg.tgt_vocab_size = len(tokenizer)
@@ -176,23 +175,34 @@ def train(cfg: TrainConfig, model_cfg: ModelConfig):
             with accelerator.accumulate(model):
                 src = batch["input_ids"]
                 tgt = batch["labels"]
-                src_mask = batch["attention_mask"].bool()
 
                 # Decoder input: labels shifted right; prepend BOS.
-                bos_id = tokenizer.bos_token_id or tokenizer.pad_token_id
-                decoder_input = torch.full(
-                    (tgt.size(0), 1),
-                    bos_id,
-                    dtype=torch.long,
-                    device=tgt.device,
+                # Labels use -100 for ignored positions, so we replace those with
+                # the real pad token id before feeding them to the model.
+                decoder_input = torch.cat(
+                    [
+                        torch.full(
+                            (tgt.size(0), 1),
+                            tokenizer.pad_token_id,
+                            dtype=torch.long,
+                            device=tgt.device,
+                        ),
+                        tgt[:, :-1].masked_fill(
+                            tgt[:, :-1] == -100, tokenizer.pad_token_id
+                        ),
+                    ],
+                    dim=1,
                 )
-                decoder_input = torch.cat([decoder_input, tgt[:, :-1]], dim=1)
+
+                # The model expects key-padding masks where True means "ignore".
+                src_key_padding_mask = src == tokenizer.pad_token_id
+                tgt_key_padding_mask = decoder_input == tokenizer.pad_token_id
 
                 logits = model(
                     src=src,
                     tgt=decoder_input,
-                    src_key_padding_mask=~src_mask,
-                    tgt_key_padding_mask=(decoder_input == tokenizer.pad_token_id),
+                    src_key_padding_mask=src_key_padding_mask,
+                    tgt_key_padding_mask=tgt_key_padding_mask,
                 )
 
                 loss = criterion(
@@ -220,6 +230,7 @@ def train(cfg: TrainConfig, model_cfg: ModelConfig):
                     model,
                     optimizer,
                     scheduler,
+                    tokenizer,
                     global_step,
                     cfg.output_dir,
                 )
@@ -232,12 +243,19 @@ def train(cfg: TrainConfig, model_cfg: ModelConfig):
         model,
         optimizer,
         scheduler,
+        tokenizer,
         global_step,
         cfg.output_dir,
         is_best=True,
     )
     if accelerator.is_main_process:
         print(f"Training complete. Checkpoints saved to {cfg.output_dir}")
+
+    # PyArrow streaming threads outlive Python shutdown and trigger a GIL
+    # crash if we let the interpreter finalize normally. os._exit() terminates
+    # the process immediately after all checkpoints are flushed, bypassing
+    # Python finalizers and avoiding the crash.
+    os._exit(0)
 
 
 def main():
@@ -266,15 +284,49 @@ def main():
         default=TrainConfig.output_dir,
         help="Directory to save checkpoints",
     )
+    parser.add_argument(
+        "--small",
+        action="store_true",
+        help="Use SmallModelConfig (d_model=128, 2 layers) for CPU/laptop runs",
+    )
+    parser.add_argument(
+        "--no-amp",
+        action="store_true",
+        help="Disable mixed-precision (required on CPU)",
+    )
+    parser.add_argument(
+        "--warmup-steps",
+        type=int,
+        default=TrainConfig.warmup_steps,
+        help="LR warmup steps",
+    )
+    parser.add_argument(
+        "--log-every",
+        type=int,
+        default=TrainConfig.log_every_n_steps,
+        help="Log loss every N steps",
+    )
+    parser.add_argument(
+        "--save-every",
+        type=int,
+        default=TrainConfig.save_every_n_steps,
+        help="Save checkpoint every N steps",
+    )
     args = parser.parse_args()
 
+    use_amp = not args.no_amp and torch.cuda.is_available()
+    model_cfg = SmallModelConfig() if args.small else ModelConfig()
     train_cfg = TrainConfig(
         max_samples=args.max_samples,
         num_epochs=args.epochs,
         batch_size=args.batch_size,
         output_dir=args.output_dir,
+        use_amp=use_amp,
+        warmup_steps=args.warmup_steps,
+        log_every_n_steps=args.log_every,
+        save_every_n_steps=args.save_every,
+        max_seq_len=model_cfg.max_seq_len,
     )
-    model_cfg = ModelConfig()
     train(train_cfg, model_cfg)
 
 

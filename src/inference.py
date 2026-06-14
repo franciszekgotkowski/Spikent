@@ -4,21 +4,20 @@
 import argparse
 
 import torch
-from transformers import AutoTokenizer
+from transformers import MarianTokenizer
 
-from config import ModelConfig
+from config import ModelConfig, SmallModelConfig
 from src.model import TransformerTranslator
 
 
-def load_checkpoint(checkpoint_dir: str, device: str | None = None):
+def load_checkpoint(checkpoint_dir: str, device: str | None = None, small: bool = False):
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    tokenizer = AutoTokenizer.from_pretrained(checkpoint_dir)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer = MarianTokenizer.from_pretrained(checkpoint_dir)
 
-    cfg = ModelConfig(
+    base_cfg = SmallModelConfig if small else ModelConfig
+    cfg = base_cfg(
         src_vocab_size=len(tokenizer),
         tgt_vocab_size=len(tokenizer),
     )
@@ -37,7 +36,7 @@ def load_checkpoint(checkpoint_dir: str, device: str | None = None):
 
 def translate_text(
     model: TransformerTranslator,
-    tokenizer: AutoTokenizer,
+    tokenizer: MarianTokenizer,
     text: str,
     device: str,
     max_len: int = 128,
@@ -67,9 +66,10 @@ def main():
     parser.add_argument("--checkpoint", required=True, help="Checkpoint directory")
     parser.add_argument("--text", default="Dzień dobry. Jak się masz?")
     parser.add_argument("--device", default=None)
+    parser.add_argument("--small", action="store_true", help="Use SmallModelConfig")
     args = parser.parse_args()
 
-    model, tokenizer, device = load_checkpoint(args.checkpoint, args.device)
+    model, tokenizer, device = load_checkpoint(args.checkpoint, args.device, args.small)
     translation = translate_text(model, tokenizer, args.text, device)
     print(f"PL: {args.text}")
     print(f"EN: {translation}")

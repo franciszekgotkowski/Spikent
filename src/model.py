@@ -26,7 +26,11 @@ class PositionalEncoding(nn.Module):
 
 
 class TransformerTranslator(nn.Module):
-    """Small encoder-decoder transformer using shared token embeddings."""
+    """Small encoder-decoder transformer using shared token embeddings.
+
+    The same embedding table is used for source and target because both
+    languages share the same tokenizer.
+    """
 
     def __init__(self, cfg):
         super().__init__()
@@ -70,8 +74,15 @@ class TransformerTranslator(nn.Module):
 
         if tgt_mask is None:
             tgt_mask = self.transformer.generate_square_subsequent_mask(tgt.size(1)).to(
-                tgt.device
+                dtype=tgt_emb.dtype, device=tgt.device
             )
+
+        # Ensure key-padding masks share the same dtype as the attention mask
+        # to avoid PyTorch deprecation warnings.
+        if src_key_padding_mask is not None:
+            src_key_padding_mask = src_key_padding_mask.to(dtype=tgt_mask.dtype)
+        if tgt_key_padding_mask is not None:
+            tgt_key_padding_mask = tgt_key_padding_mask.to(dtype=tgt_mask.dtype)
 
         out = self.transformer(
             src=src_emb,
@@ -79,6 +90,7 @@ class TransformerTranslator(nn.Module):
             tgt_mask=tgt_mask,
             src_key_padding_mask=src_key_padding_mask,
             tgt_key_padding_mask=tgt_key_padding_mask,
+            memory_key_padding_mask=src_key_padding_mask,
         )
         return self.fc_out(out)
 
@@ -94,6 +106,7 @@ class TransformerTranslator(nn.Module):
         """Greedy or beam-search decoding. Defaults to greedy for simplicity."""
         if max_len is None:
             max_len = self.max_seq_len
+        max_len = min(max_len, self.max_seq_len)
 
         self.eval()
         batch_size = src.size(0)

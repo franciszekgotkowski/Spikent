@@ -5,7 +5,7 @@ from typing import Iterator
 import torch
 from datasets import load_dataset
 from torch.utils.data import DataLoader, IterableDataset
-from transformers import PreTrainedTokenizer
+from transformers import MarianTokenizer
 
 
 def load_translation_dataset(
@@ -20,13 +20,12 @@ def load_translation_dataset(
         name=subset,
         split=split,
         streaming=streaming,
-        trust_remote_code=True,
     )
 
 
 def tokenize_example(
     example: dict,
-    tokenizer: PreTrainedTokenizer,
+    tokenizer: MarianTokenizer,
     src_column: str,
     tgt_column: str,
     max_seq_len: int,
@@ -41,14 +40,12 @@ def tokenize_example(
         max_length=max_seq_len,
         padding=False,
     )
-    # Prepend BOS and append EOS for target.
-    with tokenizer.as_target_tokenizer():
-        tgt_tokens = tokenizer(
-            tgt,
-            truncation=True,
-            max_length=max_seq_len,
-            padding=False,
-        )
+    tgt_tokens = tokenizer(
+        tgt,
+        truncation=True,
+        max_length=max_seq_len,
+        padding=False,
+    )
 
     return {
         "input_ids": src_tokens["input_ids"],
@@ -63,7 +60,7 @@ class TranslationIterableDataset(IterableDataset):
     def __init__(
         self,
         hf_dataset,
-        tokenizer: PreTrainedTokenizer,
+        tokenizer: MarianTokenizer,
         src_column: str,
         tgt_column: str,
         max_seq_len: int,
@@ -141,7 +138,7 @@ def collate_fn(batch: list[dict], pad_token_id: int) -> dict[str, torch.Tensor]:
 
 def build_dataloader(
     dataset: IterableDataset,
-    tokenizer: PreTrainedTokenizer,
+    tokenizer: MarianTokenizer,
     batch_size: int,
     num_workers: int = 0,
 ) -> DataLoader:

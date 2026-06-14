@@ -17,6 +17,18 @@ class ModelConfig:
 
 
 @dataclass
+class SmallModelConfig(ModelConfig):
+    """Tiny model for CPU / laptop smoke-testing."""
+    d_model: int = 128
+    nhead: int = 4
+    num_encoder_layers: int = 2
+    num_decoder_layers: int = 2
+    dim_feedforward: int = 256
+    dropout: float = 0.1
+    max_seq_len: int = 64
+
+
+@dataclass
 class TrainConfig:
     # Dataset
     dataset_name: str = "HuggingFaceFW/finetranslations"
@@ -48,5 +60,8 @@ class TrainConfig:
 
     # Misc
     seed: int = 42
-    num_workers: int = 4
+    # Streaming datasets do not work well with multiple workers because each
+    # worker would independently download from the Hugging Face Hub. Keep this
+    # at 0 unless you have the dataset stepped locally.
+    num_workers: int = 0
     use_amp: bool = True
